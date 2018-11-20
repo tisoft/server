@@ -628,10 +628,6 @@
 		 * Event handler when leaving previously hidden state
 		 */
 		_onShow: function(e) {
-			if (this.shown) {
-				this._setCurrentDir('/', false);
-				this.reload();
-			}
 			this.shown = true;
 		},
 
