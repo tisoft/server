@@ -22,9 +22,8 @@
 namespace OCA\OAuth2\Controller;
 
 use OC\Authentication\Exceptions\InvalidTokenException;
-use OC\Authentication\Exceptions\ExpiredTokenException;
+use OC\Authentication\Token\ExpiredTokenException;
 use OC\Authentication\Token\IProvider as TokenProvider;
-use OC\Security\Bruteforce\Throttler;
 use OCA\OAuth2\Db\AccessTokenMapper;
 use OCA\OAuth2\Db\ClientMapper;
 use OCA\OAuth2\Exceptions\AccessTokenNotFoundException;
@@ -50,8 +49,6 @@ class OauthApiController extends Controller {
 	private $secureRandom;
 	/** @var ITimeFactory */
 	private $time;
-	/** @var Throttler */
-	private $throttler;
 
 	/**
 	 * @param string $appName
@@ -62,7 +59,6 @@ class OauthApiController extends Controller {
 	 * @param TokenProvider $tokenProvider
 	 * @param ISecureRandom $secureRandom
 	 * @param ITimeFactory $time
-	 * @param Throttler $throttler
 	 */
 	public function __construct($appName,
 								IRequest $request,
@@ -71,8 +67,7 @@ class OauthApiController extends Controller {
 								ClientMapper $clientMapper,
 								TokenProvider $tokenProvider,
 								ISecureRandom $secureRandom,
-								ITimeFactory $time,
-								Throttler $throttler) {
+								ITimeFactory $time) {
 		parent::__construct($appName, $request);
 		$this->crypto = $crypto;
 		$this->accessTokenMapper = $accessTokenMapper;
@@ -80,7 +75,6 @@ class OauthApiController extends Controller {
 		$this->tokenProvider = $tokenProvider;
 		$this->secureRandom = $secureRandom;
 		$this->time = $time;
-		$this->throttler = $throttler;
 	}
 
 	/**
@@ -170,7 +164,40 @@ class OauthApiController extends Controller {
 		$accessToken->setEncryptedToken($this->crypto->encrypt($newToken, $newCode));
 		$this->accessTokenMapper->update($accessToken);
 
-		$this->throttler->resetDelay($this->request->getRemoteAddress(), 'login', ['user' => $appToken->getUID()]);
+$user = \OC::$server->getUserManager()->get($appToken->getUID());
+
+// Create token header as a JSON string
+$header = json_encode(['typ' => 'JWT', 'alg' => 'HS256']);
+
+// Create token payload as a JSON string
+$payload = json_encode([
+'iss' => \OC::$server->getURLGenerator()->getBaseUrl(),
+'sub' => $appToken->getUID(),
+'aud' => $client_id,
+'exp' => $appToken->getExpires(),
+'iat' => $this->time->getTime(),
+'auth_time' => $this->time->getTime(),
+
+'user_id' => $appToken->getUID(),
+'email' => $user->getEMailAddress(),
+'name' => $user->getDisplayName(),
+
+]);
+
+// Encode Header to Base64Url String
+$base64UrlHeader = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($header));
+
+// Encode Payload to Base64Url String
+$base64UrlPayload = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($payload));
+
+// Create Signature Hash
+$signature = hash_hmac('sha256', $base64UrlHeader . "." . $base64UrlPayload, $client->getSecret(), true);
+
+// Encode Signature to Base64Url String
+$base64UrlSignature = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($signature));
+
+// Create JWT
+$jwt = $base64UrlHeader . "." . $base64UrlPayload . "." . $base64UrlSignature;
 
 		return new JSONResponse(
 			[
@@ -179,6 +206,7 @@ class OauthApiController extends Controller {
 				'expires_in' => 3600,
 				'refresh_token' => $newCode,
 				'user_id' => $appToken->getUID(),
+'id_token' => $jwt,
 			]
 		);
 	}
